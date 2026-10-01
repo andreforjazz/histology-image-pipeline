@@ -1,0 +1,4 @@
+slideio>=2
+pylibCZIrw>=5
+# Optional backends for other file types: wsidicom and pyisyntax.
+# Install these only when needed, following each backend's platform support.

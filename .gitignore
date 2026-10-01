@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+.venv/
+.idea/
+data/
+outputs/
+external/
+.test-deps/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+# Local CODA dependency: install from its upstream project; do not relicense it.
+02_calculate_registration/coda/
+# User-provided historical comparator, retained locally but not part of the supported pipeline.
+01_conversion_downsampling/WSI2OMEtif.py
+# Historical machine-specific reports; current results are in docs/VALIDATION.md.
+docs/python_validation.txt
+docs/matlab_dependency_check.txt
+# Research images, transforms, and local environments are never part of the code repository.
+*.tif
+*.tiff
+*.vsi
+*.czi
+*.svs
+*.ndpi
+*.mrxs
+*.dcm
+*.mat
+*.zip
+*.pdf

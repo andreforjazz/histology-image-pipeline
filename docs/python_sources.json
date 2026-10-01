@@ -1,0 +1,22 @@
+[
+  {
+    "source": "vsi2ometif.py",
+    "destination": "01_conversion_downsampling/vsi2ometif.py",
+    "original_sha256": "94D9B2687CE80898A75A71E44744100798D60A8DA5E911D88FE88E5B26184847"
+  },
+  {
+    "source": "CZI2OMEtif.py",
+    "destination": "01_conversion_downsampling/CZI2OMEtif.py",
+    "original_sha256": "61E10469C22048A0267D9D45BD187A2D029B7130C513897889F5729229427D68"
+  },
+  {
+    "source": "WSI2OMEtif_All_file_types.py",
+    "destination": "01_conversion_downsampling/WSI2OMEtif_All_file_types.py",
+    "original_sha256": "E19C1FABBB904A566FCA979CD981E2D3A7482122C4892E67B62D003F04436702"
+  },
+  {
+    "source": "apply_registration_to_20x_image.py",
+    "destination": "03_apply_registration/apply_registration_to_20x_image.py",
+    "original_sha256": "AF9378457BB1FF87238D80CAA4E0ED1D812841F42A04C7A7A666D38288017A42"
+  }
+]

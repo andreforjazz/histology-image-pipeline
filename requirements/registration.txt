@@ -1,0 +1,7 @@
+-r base.txt
+scipy
+opencv-python
+matplotlib
+h5py
+# MATLAB Engine is only required for historical MAT files without tform_python.
+# It must match the installed MATLAB release; see docs/USER_GUIDE.md.
