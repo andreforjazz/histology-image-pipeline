@@ -5,6 +5,7 @@ import json
 import tifffile
 import numpy as np
 from PIL import Image, ImageCms
+from pipeline_timing import TimingLog
 
 import slideio
 
@@ -215,65 +216,76 @@ def process_images(pth, output_names, image_list, umpix, save_ome, load_native_r
     if not all(np.isfinite(um) and um >= 0 for um in umpix):
         raise ValueError('Resolutions must be finite and nonnegative.')
 
-    for idx, image_in_list in enumerate(image_list):
-        print(f"  Starting image {idx + 1} of {len(image_list)}: {image_in_list}...")
+    timing = TimingLog(outpth, "conversion")
+    with timing.measure(phase="batch_total"):
+        for idx, image_in_list in enumerate(image_list):
+            with timing.measure(os.path.join(pth, image_in_list)) as image_timing:
+                image_timing["detail"] = f"native={load_native_resolution}; folders={output_names}; requested_mpp={umpix}; ome={save_ome}"
+                print(f"  Starting image {idx + 1} of {len(image_list)}: {image_in_list}...")
 
-        # check if the image is already downsampled
-        image_name = image_in_list.rsplit('.', 1)[0]
-        image_done = 1
-        for folder_name, ome in zip(output_names, save_ome):
-            ft = '.ome.tif' if ome == 1 else '.tif'
-            output_name = os.path.join(outpth, folder_name, image_name + ft)
-            if not os.path.exists(output_name):
-                image_done = 0
-                break
-        if image_done == 1:
-            print(f"    ...already saved this file")
-            continue
-
-        # Read the image at the finest resolution any output needs
-        slide_path = os.path.join(pth, image_in_list)
-        try:
-            print(f"    ...reading {slide_path} with slideio")
-            finest_um = (0 if 0 in umpix else min(umpix))
-            image0, mppx, mppy = read_vsi(slide_path, finest_um, load_native_resolution)
-            w, h = image0.size[:2]
-
-            print(f"       ...image read successfully - file parameters: resolution of {mppx} and size of ({w}, {h})")
-
-        except Exception as e:
-            print(f"       ...ERROR reading {image_in_list}: {e}")
-            raise
-
-        # Save the image at each desired resolution
-        for folder_name, um, ome in zip(output_names, umpix, save_ome):
-            output_name = os.path.join(outpth, folder_name, image_name + '.tif')
-            if um == 0 or um < mppx:
-                if 0 < um < mppx:
-                    print(f"          ...requested {um} um/px is finer than the loaded image "
-                          f"({mppx:.4f} um/px) - saving at {mppx:.4f} instead, never upsampling")
-                um = mppx
-
-            # resize the image
-            factor_x, factor_y = um / mppx, um / mppy
-            resize_dimension = (int(np.ceil(w / factor_x)), int(np.ceil(h / factor_y)))
-            image = image0.resize(resize_dimension, resample=Image.NEAREST)
-            print(f"          ...saving {folder_name} image at a resolution of {um} - resized to {resize_dimension}")
-
-            # save the file as either a normal or an ome-tif
-            if ome == 1:
-                print("             ...saving as an ome tif")
-                save_ome_tif(image, outpth, folder_name, image_name, um)
-            else:
-                try: # save as normal tif
-                    image.save(output_name, resolution=1e4 / um, resolution_unit=3, quality=100, compression=None, icc_profile=SRGB_PROFILE)
-                except Exception as e: # save as ome-tif
-                    save_ome_tif(image, outpth, folder_name, image_name, um)
-                    print(f"          ...error saving {image_in_list} as tif: {e}, try saving this image as an ome-tif")
+                # check if the image is already downsampled
+                image_name = image_in_list.rsplit('.', 1)[0]
+                image_done = 1
+                for folder_name, ome in zip(output_names, save_ome):
+                    ft = '.ome.tif' if ome == 1 else '.tif'
+                    output_name = os.path.join(outpth, folder_name, image_name + ft)
+                    if not os.path.exists(output_name):
+                        image_done = 0
+                        break
+                if image_done == 1:
+                    image_timing["status"] = "skipped_existing"
+                    print(f"    ...already saved this file")
                     continue
 
-        print("  Image save successful!")
-        print("  ")
+                # Read the image at the finest resolution any output needs
+                slide_path = os.path.join(pth, image_in_list)
+                with timing.measure(slide_path, "read") as read_timing:
+                    try:
+                        print(f"    ...reading {slide_path} with slideio")
+                        finest_um = (0 if 0 in umpix else min(umpix))
+                        image0, mppx, mppy = read_vsi(slide_path, finest_um, load_native_resolution)
+                        w, h = image0.size[:2]
+
+                        read_timing["mpp"] = mppx
+                        print(f"       ...image read successfully - file parameters: resolution of {mppx} and size of ({w}, {h})")
+
+                    except Exception as e:
+                        print(f"       ...ERROR reading {image_in_list}: {e}")
+                        raise
+
+                # Save the image at each desired resolution
+                for folder_name, um, ome in zip(output_names, umpix, save_ome):
+                    with timing.measure(slide_path, "resolution_total", folder_name, um) as output_timing:
+                        output_name = os.path.join(outpth, folder_name, image_name + '.tif')
+                        if um == 0 or um < mppx:
+                            if 0 < um < mppx:
+                                print(f"          ...requested {um} um/px is finer than the loaded image "
+                                      f"({mppx:.4f} um/px) - saving at {mppx:.4f} instead, never upsampling")
+                            um = mppx
+
+                        output_timing["mpp"] = um
+                        # resize the image
+                        factor_x, factor_y = um / mppx, um / mppy
+                        resize_dimension = (int(np.ceil(w / factor_x)), int(np.ceil(h / factor_y)))
+                        with timing.measure(slide_path, "resize", folder_name, um):
+                            image = image0.resize(resize_dimension, resample=Image.NEAREST)
+                        print(f"          ...saving {folder_name} image at a resolution of {um} - resized to {resize_dimension}")
+
+                        with timing.measure(slide_path, "save", folder_name, um):
+                            # save the file as either a normal or an ome-tif
+                            if ome == 1:
+                                print("             ...saving as an ome tif")
+                                save_ome_tif(image, outpth, folder_name, image_name, um)
+                            else:
+                                try: # save as normal tif
+                                    image.save(output_name, resolution=1e4 / um, resolution_unit=3, quality=100, compression=None, icc_profile=SRGB_PROFILE)
+                                except Exception as e: # save as ome-tif
+                                    save_ome_tif(image, outpth, folder_name, image_name, um)
+                                    print(f"          ...error saving {image_in_list} as tif: {e}, try saving this image as an ome-tif")
+                                    continue
+
+                print("  Image save successful!")
+                print("  ")
 
 
 def VSI2tif(pth, output_names, umpix, save_ome=0, load_native_resolution=1, outpth=None):

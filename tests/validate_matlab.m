@@ -28,11 +28,53 @@ for channel = 1:3
 end
 imwrite(im, fullfile(folder,'a.tif'));
 imwrite(im, fullfile(folder,'b.tif'));
-run_registration(folder,0,1,[]);
+manifest=fullfile(output_folder,'scanners.csv');
+fid=fopen(manifest,'w');
+fprintf(fid,'image,scanner\na,Synthetic scanner A\nb,Synthetic scanner B\n');
+fclose(fid);
+run_registration(folder,0,1,1,'fallback',manifest,5);
 warps = fullfile(folder,'registered','elastic registration','save_warps');
 v = load(fullfile(warps,'b.mat'));
 assert(isfield(v,'tform_python'), 'Numeric transform export missing.');
 assert(isfile(fullfile(warps,'D','b.mat')), 'Elastic transform missing.');
 assert(isfile(fullfile(folder,'registered','elastic registration','b.jpg')));
-disp('MATLAB transform fixtures and synthetic CODA integration: PASS');
+logs=dir(fullfile(folder,'timings','calculate_registration_*.csv'));
+assert(numel(logs)==1,'Use a fresh output folder for this validation.');
+logfile=fullfile(logs(1).folder,logs(1).name);
+tab=readtable(logfile,'TextType','string','Delimiter',',','ReadVariableNames',true);
+assert(sum(tab.phase=="image_total")==2);
+assert(sum(tab.phase=="mask" & tab.status=="ok")==2);
+assert(all(tab.seconds>=0));
+assert(tab.scanner(tab.phase=="image_total" & tab.image=="a")=="Synthetic scanner A");
+assert(tab.status(tab.phase=="image_total" & tab.image=="a")=="reference");
+assert(tab.status(tab.phase=="image_total" & tab.image=="b")=="ok");
+
+% Compare instrumented output with unchanged CODA on the same generated inputs.
+baseline=fullfile(output_folder,'baseline_2x');
+mkdir(baseline);
+copyfile(fullfile(folder,'*.tif'),baseline);
+previous=pwd;
+restore=onCleanup(@() cd(previous)); %#ok<NASGU>
+cd(fullfile(root,'02_calculate_registration','coda'));
+calculate_tissue_ws(baseline,1);
+calculate_image_registration(baseline,0,1);
+baseline_warps=fullfile(baseline,'registered','elastic registration','save_warps');
+v0=load(fullfile(baseline_warps,'b.mat'));
+d0=load(fullfile(baseline_warps,'D','b.mat'));
+d1=load(fullfile(warps,'D','b.mat'));
+assert(isequal(v.tform_python,v0.tform.T));
+assert(isequal(d0.D,d1.D));
+assert(isequal(imread(fullfile(baseline,'registered','elastic registration','b.jpg')), ...
+    imread(fullfile(folder,'registered','elastic registration','b.jpg'))));
+cd(previous);
+
+% Reruns must record reused transforms and skipped masks, not fresh computation.
+run_registration(folder,0,1,1,'fallback',manifest,5);
+newlogs=dir(fullfile(folder,'timings','calculate_registration_*.csv'));
+assert(numel(newlogs)==2);
+second=newlogs(~strcmp({newlogs.name},logs(1).name));
+reused=readtable(fullfile(second.folder,second.name),'TextType','string','Delimiter',',','ReadVariableNames',true);
+assert(sum(reused.phase=="image_total" & reused.status=="reused")==1);
+assert(sum(reused.phase=="mask" & reused.status=="skipped_existing")==2);
+disp('MATLAB timing, unchanged CODA outputs, reuse labels and transform fixtures: PASS');
 end

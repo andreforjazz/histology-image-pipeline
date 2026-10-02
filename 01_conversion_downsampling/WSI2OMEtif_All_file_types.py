@@ -6,6 +6,7 @@ import glob
 import tifffile
 import numpy as np
 from PIL import Image, ImageCms
+from pipeline_timing import TimingLog
 from openslide import OpenSlide
 from image_metadata import read_tiff_mpp, validate_mpp
 
@@ -278,233 +279,248 @@ def process_images(pth, output_names, image_list, umpix, save_ome, load_native_r
     if not all(np.isfinite(um) and um >= 0 for um in umpix):
         raise ValueError('Resolutions must be finite and nonnegative.')
 
-    for idx, image_in_list in enumerate(image_list):
-        print(f"  Starting image {idx + 1} of {len(image_list)}: {image_in_list}...")
+    timing = TimingLog(outpth, "conversion")
+    with timing.measure(phase="batch_total"):
+        for idx, image_in_list in enumerate(image_list):
+            with timing.measure(os.path.join(pth, image_in_list)) as image_timing:
+                image_timing["detail"] = f"native={load_native_resolution}; folders={output_names}; requested_mpp={umpix}; ome={save_ome}"
+                print(f"  Starting image {idx + 1} of {len(image_list)}: {image_in_list}...")
 
-        # check if the image is already downsampled
-        image_name = get_image_name(image_in_list)
-        image_done = 1
-        for folder_name, ome in zip(output_names, save_ome):
-            ft = '.ome.tif' if ome == 1 else '.tif'
-            output_name = os.path.join(outpth, folder_name, image_name + ft)
-            if not os.path.exists(output_name):
-                image_done = 0
-                break
-        if image_done == 1:
-            print(f"    ...already saved this file")
-            continue
-
-        # Read the image
-        slide_path = os.path.join(pth, image_in_list)
-        try:
-            # Get file extension
-            file_ext = os.path.splitext(slide_path)[-1].lower()
-            target_um = (0 if 0 in umpix else min(umpix))
-
-            if file_ext in ['.ndpi', '.ndp', '.svs', '.scn', '.mrxs', '.qptiff']:
-                print(f"    ...reading {slide_path} with OpenSlide")
-                if file_ext == '.mrxs':
-                    companion_folder = os.path.join(pth, image_name)
-                    if not os.path.isdir(companion_folder):
-                        print(f"       ...NOTE: companion folder '{image_name}' for MRXS file not found in {pth}")
-
-                wsi = OpenSlide(slide_path)
-                try:
-                    mppx = float(wsi.properties['openslide.mpp-x'])
-                    mppy = float(wsi.properties['openslide.mpp-y'])
-
-                    # Choose coarsest pyramid level finer than or equal to target_um
-                    level = 0
-                    if target_um > 0 and not load_native_resolution:
-                        for lvl, factor in enumerate(wsi.level_downsamples):
-                            if max(mppx, mppy) * factor <= target_um:
-                                level = lvl
-
-                    w_lvl, h_lvl = wsi.level_dimensions[level]
-                    downsample = wsi.level_downsamples[level]
-                    if level > 0:
-                        print(f"       ...reading pyramid level {level} ({w_lvl}x{h_lvl}, downsample {downsample:.1f}x)")
-                    else:
-                        print(f"       ...reading pyramid level 0 ({w_lvl}x{h_lvl})")
-
-                    image0 = wsi.read_region((0, 0), level, (w_lvl, h_lvl)).convert('RGB')
-                    w, h = w_lvl, h_lvl
-                    mppx = mppx * downsample
-                    mppy = mppy * downsample
-                finally:
-                    wsi.close()
-
-                # Burn scanner color calibration into .svs pixels
-                if file_ext == '.svs' and APPLY_EMBEDDED_ICC:
-                    icc = read_embedded_icc(slide_path)
-                    if icc is not None:
-                        image0 = apply_embedded_icc(image0, icc)
-                    else:
-                        print("       ...no embedded ICC profile found - keeping stored pixel values")
-
-            elif file_ext == '.vsi':
-                from vsi2ometif import read_vsi
-                image0, mppx, mppy = read_vsi(slide_path, target_um, load_native_resolution)
-                w, h = image0.size
-
-            elif file_ext == '.czi':
-                print(f"    ...reading Zeiss CZI {slide_path} with pylibCZIrw")
-                image0, mppx, mppy = read_czi(slide_path, target_um, load_native_resolution)
-                w, h = image0.size[:2]
-
-            elif file_ext == '.dcm':
-                print(f"    ...reading Pramana DICOM {slide_path}")
-                if wsidicom is not None:
-                    wsi = wsidicom.WsiDicom.open(slide_path)
-                    try:
-                        w0, h0 = wsi.size.width, wsi.size.height
-                        mpp0_x = float(wsi.mpp.width)
-                        mpp0_y = float(wsi.mpp.height)
-
-                        level_idx = 0
-                        if target_um > 0 and len(wsi.levels) > 1:
-                            for idx, lvl in enumerate(wsi.levels):
-                                if max(float(lvl.mpp.width), float(lvl.mpp.height)) <= target_um:
-                                    level_idx = idx
-
-                        lvl = wsi.levels[level_idx]
-                        w_lvl, h_lvl = lvl.size.width, lvl.size.height
-                        mppx = float(lvl.mpp.width)
-                        mppy = float(lvl.mpp.height)
-                        print(f"       ...reading DICOM level {level_idx} ({w_lvl}x{h_lvl} at {mppx:.4f} um/px)")
-                        image0 = wsi.read_region((0, 0), level_idx, (w_lvl, h_lvl)).convert('RGB')
-                        w, h = w_lvl, h_lvl
-                    finally:
-                        wsi.close()
-                else:
-                    wsi = OpenSlide(slide_path)
-                    try:
-                        mppx = float(wsi.properties['openslide.mpp-x'])
-                        mppy = float(wsi.properties['openslide.mpp-y'])
-                        level = 0
-                        if target_um > 0 and not load_native_resolution:
-                            for lvl, factor in enumerate(wsi.level_downsamples):
-                                if max(mppx, mppy) * factor <= target_um:
-                                    level = lvl
-                        w_lvl, h_lvl = wsi.level_dimensions[level]
-                        downsample = wsi.level_downsamples[level]
-                        image0 = wsi.read_region((0, 0), level, (w_lvl, h_lvl)).convert('RGB')
-                        w, h = w_lvl, h_lvl
-                        mppx = mppx * downsample
-                        mppy = mppy * downsample
-                    finally:
-                        wsi.close()
-
-            elif file_ext in ['.tif', '.tiff']:
-                is_wsi = False
-                wsi = None
-                try:
-                    wsi = OpenSlide(slide_path)
-                    vendor = wsi.properties.get('openslide.vendor', '').lower()
-                    if vendor == 'ventana' or wsi.level_count > 1 or 'roche' in slide_path.lower() or 'ventana' in slide_path.lower():
-                        is_wsi = True
-                except Exception:
-                    is_wsi = False
-
-                if is_wsi:
-                    print(f"    ...reading Roche Ventana / WSI TIFF {slide_path} with OpenSlide")
-                    try:
-                        if 'openslide.mpp-x' in wsi.properties:
-                            mppx = float(wsi.properties['openslide.mpp-x'])
-                            mppy = float(wsi.properties['openslide.mpp-y'])
-                        elif 'ventana.ScanRes' in wsi.properties:
-                            mppx = float(wsi.properties['ventana.ScanRes'])
-                            mppy = float(wsi.properties['ventana.ScanRes'])
-                        elif 'tiff.XResolution' in wsi.properties and wsi.properties.get('tiff.ResolutionUnit') == 'centimeter':
-                            mppx = 1e4 / float(wsi.properties['tiff.XResolution'])
-                            mppy = 1e4 / float(wsi.properties['tiff.YResolution'])
-                        else:
-                            mppx, mppy = read_tiff_mpp(slide_path)
-
-                        level = 0
-                        if target_um > 0 and not load_native_resolution:
-                            for lvl, factor in enumerate(wsi.level_downsamples):
-                                if max(mppx, mppy) * factor <= target_um:
-                                    level = lvl
-
-                        w_lvl, h_lvl = wsi.level_dimensions[level]
-                        downsample = wsi.level_downsamples[level]
-                        print(f"       ...reading pyramid level {level} ({w_lvl}x{h_lvl}, downsample {downsample:.1f}x)")
-                        image0 = wsi.read_region((0, 0), level, (w_lvl, h_lvl)).convert('RGB')
-                        w, h = w_lvl, h_lvl
-                        mppx = mppx * downsample
-                        mppy = mppy * downsample
-                    finally:
-                        wsi.close()
-
-                    if APPLY_EMBEDDED_ICC:
-                        icc = read_embedded_icc(slide_path)
-                        if icc is not None:
-                            image0 = apply_embedded_icc(image0, icc)
-                        else:
-                            print("       ...no embedded ICC profile found - keeping stored pixel values")
-                else:
-                    if wsi is not None:
-                        wsi.close()
-                    print(f"    ...reading standard TIFF {slide_path} with PIL")
-                    image0 = Image.open(slide_path).convert('RGB')
-                    w, h = image0.size[:2]
-                    try:
-                        wsi = OpenSlide(slide_path)
-                        mppx, mppy = float(wsi.properties['openslide.mpp-x']), float(wsi.properties['openslide.mpp-y'])
-                        wsi.close()
-                    except Exception:
-                        mppx, mppy = read_tiff_mpp(slide_path)
-
-            elif file_ext in ['.png', '.jpg']:
-                raise ValueError('Convert uncalibrated PNG/JPEG inputs to TIFF with known physical pixel spacing first.')
-
-            elif file_ext in ['.i2syntax', '.isyntax']:
-                print(f"    ...reading {slide_path} with pyisyntax")
-                isyntax_image = read_isyntax(slide_path, target_um)
-                if isyntax_image is None:
-                    print(f"       ...SKIPPING {image_in_list}: libisyntax cannot decode this file")
-                    continue
-                image0, mppx, mppy = isyntax_image
-                w, h = image0.size[:2]
-
-            else:
-                print(f"    ...unrecognized or unsupported file extension for: {slide_path}")
-                continue
-
-            validate_mpp(mppx, mppy)
-            print(f"       ...image read successfully - file parameters: resolution of {mppx:.4f} um/px and size of ({w}, {h})")
-
-        except Exception as e:
-            print(f"       ...ERROR reading {image_in_list}: {e}")
-            raise
-
-        # Save the image at each desired resolution
-        for folder_name, um, ome in zip(output_names, umpix, save_ome):
-            output_name = os.path.join(outpth, folder_name, image_name + '.tif')
-            if um == 0 or um < max(mppx, mppy):
-                um = max(mppx, mppy)
-
-            # resize the image
-            factor_x, factor_y = um / mppx, um / mppy
-            resize_dimension = (int(np.ceil(w / factor_x)), int(np.ceil(h / factor_y)))
-            image = image0.resize(resize_dimension, resample=Image.NEAREST)
-            print(f"          ...saving {folder_name} image at a resolution of {um} um/px - resized to {resize_dimension}")
-
-            # save the file as either a normal or an ome-tif
-            if ome == 1:
-                print("             ...saving as an ome tif")
-                save_ome_tif(image, outpth, folder_name, image_name, um)
-            else:
-                try:  # save as normal tif
-                    image.save(output_name, resolution=1e4 / um, resolution_unit=3, compression=None, icc_profile=SRGB_PROFILE)
-                except Exception as e:  # save as ome-tif
-                    save_ome_tif(image, outpth, folder_name, image_name, um)
-                    print(f"          ...error saving {image_in_list} as tif: {e}, try saving this image as an ome-tif")
+                # check if the image is already downsampled
+                image_name = get_image_name(image_in_list)
+                image_done = 1
+                for folder_name, ome in zip(output_names, save_ome):
+                    ft = '.ome.tif' if ome == 1 else '.tif'
+                    output_name = os.path.join(outpth, folder_name, image_name + ft)
+                    if not os.path.exists(output_name):
+                        image_done = 0
+                        break
+                if image_done == 1:
+                    image_timing["status"] = "skipped_existing"
+                    print(f"    ...already saved this file")
                     continue
 
-        print("  Image save successful!")
-        print("  ")
+                # Read the image
+                slide_path = os.path.join(pth, image_in_list)
+                with timing.measure(slide_path, "read") as read_timing:
+                    try:
+                        # Get file extension
+                        file_ext = os.path.splitext(slide_path)[-1].lower()
+                        target_um = (0 if 0 in umpix else min(umpix))
+
+                        if file_ext in ['.ndpi', '.ndp', '.svs', '.scn', '.mrxs', '.qptiff']:
+                            print(f"    ...reading {slide_path} with OpenSlide")
+                            if file_ext == '.mrxs':
+                                companion_folder = os.path.join(pth, image_name)
+                                if not os.path.isdir(companion_folder):
+                                    print(f"       ...NOTE: companion folder '{image_name}' for MRXS file not found in {pth}")
+
+                            wsi = OpenSlide(slide_path)
+                            try:
+                                mppx = float(wsi.properties['openslide.mpp-x'])
+                                mppy = float(wsi.properties['openslide.mpp-y'])
+
+                                # Choose coarsest pyramid level finer than or equal to target_um
+                                level = 0
+                                if target_um > 0 and not load_native_resolution:
+                                    for lvl, factor in enumerate(wsi.level_downsamples):
+                                        if max(mppx, mppy) * factor <= target_um:
+                                            level = lvl
+
+                                w_lvl, h_lvl = wsi.level_dimensions[level]
+                                downsample = wsi.level_downsamples[level]
+                                if level > 0:
+                                    print(f"       ...reading pyramid level {level} ({w_lvl}x{h_lvl}, downsample {downsample:.1f}x)")
+                                else:
+                                    print(f"       ...reading pyramid level 0 ({w_lvl}x{h_lvl})")
+
+                                image0 = wsi.read_region((0, 0), level, (w_lvl, h_lvl)).convert('RGB')
+                                w, h = w_lvl, h_lvl
+                                mppx = mppx * downsample
+                                mppy = mppy * downsample
+                            finally:
+                                wsi.close()
+
+                            # Burn scanner color calibration into .svs pixels
+                            if file_ext == '.svs' and APPLY_EMBEDDED_ICC:
+                                icc = read_embedded_icc(slide_path)
+                                if icc is not None:
+                                    image0 = apply_embedded_icc(image0, icc)
+                                else:
+                                    print("       ...no embedded ICC profile found - keeping stored pixel values")
+
+                        elif file_ext == '.vsi':
+                            from vsi2ometif import read_vsi
+                            image0, mppx, mppy = read_vsi(slide_path, target_um, load_native_resolution)
+                            w, h = image0.size
+
+                        elif file_ext == '.czi':
+                            print(f"    ...reading Zeiss CZI {slide_path} with pylibCZIrw")
+                            image0, mppx, mppy = read_czi(slide_path, target_um, load_native_resolution)
+                            w, h = image0.size[:2]
+
+                        elif file_ext == '.dcm':
+                            print(f"    ...reading Pramana DICOM {slide_path}")
+                            if wsidicom is not None:
+                                wsi = wsidicom.WsiDicom.open(slide_path)
+                                try:
+                                    w0, h0 = wsi.size.width, wsi.size.height
+                                    mpp0_x = float(wsi.mpp.width)
+                                    mpp0_y = float(wsi.mpp.height)
+
+                                    level_idx = 0
+                                    if target_um > 0 and len(wsi.levels) > 1:
+                                        for idx, lvl in enumerate(wsi.levels):
+                                            if max(float(lvl.mpp.width), float(lvl.mpp.height)) <= target_um:
+                                                level_idx = idx
+
+                                    lvl = wsi.levels[level_idx]
+                                    w_lvl, h_lvl = lvl.size.width, lvl.size.height
+                                    mppx = float(lvl.mpp.width)
+                                    mppy = float(lvl.mpp.height)
+                                    print(f"       ...reading DICOM level {level_idx} ({w_lvl}x{h_lvl} at {mppx:.4f} um/px)")
+                                    image0 = wsi.read_region((0, 0), level_idx, (w_lvl, h_lvl)).convert('RGB')
+                                    w, h = w_lvl, h_lvl
+                                finally:
+                                    wsi.close()
+                            else:
+                                wsi = OpenSlide(slide_path)
+                                try:
+                                    mppx = float(wsi.properties['openslide.mpp-x'])
+                                    mppy = float(wsi.properties['openslide.mpp-y'])
+                                    level = 0
+                                    if target_um > 0 and not load_native_resolution:
+                                        for lvl, factor in enumerate(wsi.level_downsamples):
+                                            if max(mppx, mppy) * factor <= target_um:
+                                                level = lvl
+                                    w_lvl, h_lvl = wsi.level_dimensions[level]
+                                    downsample = wsi.level_downsamples[level]
+                                    image0 = wsi.read_region((0, 0), level, (w_lvl, h_lvl)).convert('RGB')
+                                    w, h = w_lvl, h_lvl
+                                    mppx = mppx * downsample
+                                    mppy = mppy * downsample
+                                finally:
+                                    wsi.close()
+
+                        elif file_ext in ['.tif', '.tiff']:
+                            is_wsi = False
+                            wsi = None
+                            try:
+                                wsi = OpenSlide(slide_path)
+                                vendor = wsi.properties.get('openslide.vendor', '').lower()
+                                if vendor == 'ventana' or wsi.level_count > 1 or 'roche' in slide_path.lower() or 'ventana' in slide_path.lower():
+                                    is_wsi = True
+                            except Exception:
+                                is_wsi = False
+
+                            if is_wsi:
+                                print(f"    ...reading Roche Ventana / WSI TIFF {slide_path} with OpenSlide")
+                                try:
+                                    if 'openslide.mpp-x' in wsi.properties:
+                                        mppx = float(wsi.properties['openslide.mpp-x'])
+                                        mppy = float(wsi.properties['openslide.mpp-y'])
+                                    elif 'ventana.ScanRes' in wsi.properties:
+                                        mppx = float(wsi.properties['ventana.ScanRes'])
+                                        mppy = float(wsi.properties['ventana.ScanRes'])
+                                    elif 'tiff.XResolution' in wsi.properties and wsi.properties.get('tiff.ResolutionUnit') == 'centimeter':
+                                        mppx = 1e4 / float(wsi.properties['tiff.XResolution'])
+                                        mppy = 1e4 / float(wsi.properties['tiff.YResolution'])
+                                    else:
+                                        mppx, mppy = read_tiff_mpp(slide_path)
+
+                                    level = 0
+                                    if target_um > 0 and not load_native_resolution:
+                                        for lvl, factor in enumerate(wsi.level_downsamples):
+                                            if max(mppx, mppy) * factor <= target_um:
+                                                level = lvl
+
+                                    w_lvl, h_lvl = wsi.level_dimensions[level]
+                                    downsample = wsi.level_downsamples[level]
+                                    print(f"       ...reading pyramid level {level} ({w_lvl}x{h_lvl}, downsample {downsample:.1f}x)")
+                                    image0 = wsi.read_region((0, 0), level, (w_lvl, h_lvl)).convert('RGB')
+                                    w, h = w_lvl, h_lvl
+                                    mppx = mppx * downsample
+                                    mppy = mppy * downsample
+                                finally:
+                                    wsi.close()
+
+                                if APPLY_EMBEDDED_ICC:
+                                    icc = read_embedded_icc(slide_path)
+                                    if icc is not None:
+                                        image0 = apply_embedded_icc(image0, icc)
+                                    else:
+                                        print("       ...no embedded ICC profile found - keeping stored pixel values")
+                            else:
+                                if wsi is not None:
+                                    wsi.close()
+                                print(f"    ...reading standard TIFF {slide_path} with PIL")
+                                image0 = Image.open(slide_path).convert('RGB')
+                                w, h = image0.size[:2]
+                                try:
+                                    wsi = OpenSlide(slide_path)
+                                    mppx, mppy = float(wsi.properties['openslide.mpp-x']), float(wsi.properties['openslide.mpp-y'])
+                                    wsi.close()
+                                except Exception:
+                                    mppx, mppy = read_tiff_mpp(slide_path)
+
+                        elif file_ext in ['.png', '.jpg']:
+                            raise ValueError('Convert uncalibrated PNG/JPEG inputs to TIFF with known physical pixel spacing first.')
+
+                        elif file_ext in ['.i2syntax', '.isyntax']:
+                            print(f"    ...reading {slide_path} with pyisyntax")
+                            isyntax_image = read_isyntax(slide_path, target_um)
+                            if isyntax_image is None:
+                                image_timing["status"] = "unsupported"
+                                read_timing["status"] = "unsupported"
+                                print(f"       ...SKIPPING {image_in_list}: libisyntax cannot decode this file")
+                                continue
+                            image0, mppx, mppy = isyntax_image
+                            w, h = image0.size[:2]
+
+                        else:
+                            image_timing["status"] = "unsupported"
+                            read_timing["status"] = "unsupported"
+                            print(f"    ...unrecognized or unsupported file extension for: {slide_path}")
+                            continue
+
+                        validate_mpp(mppx, mppy)
+                        read_timing["mpp"] = mppx
+                        print(f"       ...image read successfully - file parameters: resolution of {mppx:.4f} um/px and size of ({w}, {h})")
+
+                    except Exception as e:
+                        print(f"       ...ERROR reading {image_in_list}: {e}")
+                        raise
+
+                # Save the image at each desired resolution
+                for folder_name, um, ome in zip(output_names, umpix, save_ome):
+                    with timing.measure(slide_path, "resolution_total", folder_name, um) as output_timing:
+                        output_name = os.path.join(outpth, folder_name, image_name + '.tif')
+                        if um == 0 or um < max(mppx, mppy):
+                            um = max(mppx, mppy)
+
+                        output_timing["mpp"] = um
+                        # resize the image
+                        factor_x, factor_y = um / mppx, um / mppy
+                        resize_dimension = (int(np.ceil(w / factor_x)), int(np.ceil(h / factor_y)))
+                        with timing.measure(slide_path, "resize", folder_name, um):
+                            image = image0.resize(resize_dimension, resample=Image.NEAREST)
+                        print(f"          ...saving {folder_name} image at a resolution of {um} um/px - resized to {resize_dimension}")
+
+                        with timing.measure(slide_path, "save", folder_name, um):
+                            # save the file as either a normal or an ome-tif
+                            if ome == 1:
+                                print("             ...saving as an ome tif")
+                                save_ome_tif(image, outpth, folder_name, image_name, um)
+                            else:
+                                try:  # save as normal tif
+                                    image.save(output_name, resolution=1e4 / um, resolution_unit=3, compression=None, icc_profile=SRGB_PROFILE)
+                                except Exception as e:  # save as ome-tif
+                                    save_ome_tif(image, outpth, folder_name, image_name, um)
+                                    print(f"          ...error saving {image_in_list} as tif: {e}, try saving this image as an ome-tif")
+                                    continue
+
+                print("  Image save successful!")
+                print("  ")
 
 
 def WSI2tif(pth, output_names, umpix, save_ome, load_native_resolution=1, outpth=None):

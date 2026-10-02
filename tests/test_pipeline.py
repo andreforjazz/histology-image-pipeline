@@ -214,6 +214,16 @@ class PipelineTests(unittest.TestCase):
         registration.apply_registration_to_20x(str(source), str(warps), 0.5, out_folder=str(out))
         self.assertEqual(len(list(out.glob('*.ome.tif'))), 2)
         self.assertEqual(read_tiff_mpp(out / 'a.ome.tif'), (0.5, 0.5))
+        import csv
+        logs = list((out / 'timings').glob('apply_registration_*.csv'))
+        self.assertEqual(len(logs), 1)
+        with logs[0].open(newline='', encoding='utf-8') as stream:
+            records = list(csv.DictReader(stream))
+        totals = {r['image']: r for r in records if r['phase']=='image_total'}
+        self.assertEqual(totals['a']['status'], 'reference')
+        self.assertEqual(totals['b']['status'], 'ok')
+        self.assertEqual({r['phase'] for r in records}, {'read','apply','save','image_total','batch_total'})
+
 
     def test_resolution_scaling_10x_20x_40x(self):
         for scale in (5, 10, 20):

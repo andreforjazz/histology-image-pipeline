@@ -12,6 +12,8 @@ file_format = 'vsi'                 # 'vsi', 'czi', or 'other'
 folder_names = ['2x', '10x', '20x', '40x']
 pixel_resolutions = [5, 1, 0.5, 0.25]  # Micrometres/pixel; 0 keeps native resolution
 save_ome = [0, 1, 1, 1]             # Per folder: 0 = plain TIFF, 1 = OME-TIFF
+scanner_name = 'unknown'            # Actual scanner/model, e.g. Olympus VS200
+scanner_manifest = None            # Optional CSV with image,scanner for mixed batches
 load_native_resolution = 1          # 1 = native decoding; 0 = allow source pyramid
 # Lists correspond by position. Each source is loaded once at the finest needed
 # resolution, then all requested outputs are generated from that loaded image.
@@ -19,7 +21,7 @@ load_native_resolution = 1          # 1 = native decoding; 0 = allow source pyra
 
 
 def run_conversion(input_path, output_path, image_format, folders, resolutions,
-                   ome_flags, native=1):
+                   ome_flags, native=1, scanner="unknown", manifest=None):
     """Validate all outputs first, then call the selected reader once per batch."""
     source = Path(input_path).resolve()
     if not source.exists():
@@ -53,15 +55,17 @@ def run_conversion(input_path, output_path, image_format, folders, resolutions,
                'other': ('WSI2OMEtif_All_file_types', 'WSI2tif')}
     name, function = modules[image_format]
     convert = getattr(importlib.import_module(name), function)
-    convert(str(source), list(folders), list(resolutions), list(ome_flags),
-            native, outpth=str(output))
+    from pipeline_timing import timing_settings
+    with timing_settings(scanner, manifest):
+        convert(str(source), list(folders), list(resolutions), list(ome_flags),
+                native, outpth=str(output))
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
         run_conversion(pth0, outpth, file_format, folder_names, pixel_resolutions,
-                       save_ome, load_native_resolution)
+                       save_ome, load_native_resolution, scanner_name, scanner_manifest)
         return
     p = argparse.ArgumentParser(description='Convert and downsample whole-slide images.')
     p.add_argument('--format', choices=['vsi', 'czi', 'other'], required=True)
@@ -73,11 +77,13 @@ def main(argv=None):
     formats.add_argument('--plain-tif', action='store_true', help='Write plain TIFF for every output')
     formats.add_argument('--save-ome', nargs='+', type=int, choices=[0, 1], help='Per folder: 0 = TIFF, 1 = OME-TIFF')
     p.add_argument('--fast-pyramid', action='store_true')
+    p.add_argument('--scanner', default='unknown', help='Actual scanner/model for this batch')
+    p.add_argument('--scanner-manifest', type=Path, help='Optional CSV: image,scanner')
     args = p.parse_args(argv)
     flags = args.save_ome if args.save_ome is not None else [int(not args.plain_tif)] * len(args.folder)
     try:
         run_conversion(args.input, args.output, args.format, args.folder, args.mpp,
-                       flags, int(not args.fast_pyramid))
+                       flags, int(not args.fast_pyramid), args.scanner, args.scanner_manifest)
     except ValueError as exc:
         p.error(str(exc))
 

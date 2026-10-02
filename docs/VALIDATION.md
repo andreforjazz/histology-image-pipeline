@@ -1,10 +1,10 @@
 # Validation
 
-Validation performed on 1 October 2026. Tests use synthetic data; no research images or patient data are included.
+Validation updated on 2 October 2026. Tests use synthetic data; no research images or patient data are included.
 
 ## Completed locally
 
-All 22 Python tests passed in the isolated project environment. The initial 18-test suite also passed on GitHub's Windows and Linux runners. Dependency imports and `pip check` passed. Exact installed versions are recorded in `requirements/validated-windows-py311.txt`.
+All 30 Python tests passed in the isolated project environment. The preceding 22-test suite also passed on GitHub's Windows and Linux runners; GitHub Actions runs the updated suite on each push. Dependency imports and `pip check` passed. Exact installed versions are recorded in `requirements/validated-windows-py311.txt`.
 
 The four added tests verify no-argument script settings, four calibrated outputs from one image read, one reader call for both dedicated VSI/CZI routes (including mixed native/downsampled requests), multi-output CLI usage, and rejection of invalid output lists before creating directories. Dedicated multi-output reader-call checks use mocked reader results; the separate generated-CZI decoding test still exercises the real backend.
 
@@ -16,6 +16,18 @@ The four added tests verify no-argument script settings, four calibrated outputs
 - A 17-degree affine rotation with translation and a constant elastic displacement matched MATLAB's generated reference images exactly in the tested fixtures.
 
 The tests are reproducible using `tests/test_pipeline.py`, `tests/validate_matlab.m`, and `tests/check_matlab_results.py`. GitHub Actions runs the Python suite on Windows and Linux; MATLAB execution remains a separate licensed integration check.
+
+## Timing validation
+
+- Deterministic clock tests verify nested elapsed times and scanner-manifest matching, including quoted scanner names and dotted image IDs.
+- A real synthetic TIFF is exported to two resolutions from one read; CSV records contain one shared read, both resolution totals, and a complete image total. A rerun is marked skipped and excluded from averages.
+- Failure tests cover read/phase exceptions, a failed second output, and an incomplete MATLAB numeric-export retry. Completed historical measurements remain available; partial observations do not enter the averages.
+- Report tests verify latest-complete-run selection, optional repeat inclusion, sample counts, summed mask/export time without double counting, and unmeasured inventory entries.
+- The application fixture verifies read/apply/save/image/batch records and separate reference status alongside the saved registered images.
+- MATLAB R2024a ran explicit per-image masks, registration, numeric export and a cached rerun using generated tissue-like images and a two-scanner manifest. Timed outputs had exactly the same affine matrix, elastic field and registered JPEG as the unchanged CODA functions on the same inputs.
+- Python applied these actual MATLAB transforms and the report generator successfully combined the MATLAB and Python logs. The existing affine/constant-field MATLAB parity check still passed.
+
+Use a **new empty output directory** when rerunning `tests/validate_matlab.m`; its checks deliberately distinguish fresh work from reuse. Synthetic timings validate instrumentation, not representative scanner throughput. No real-dataset benchmark or historical-time estimate has been produced.
 
 ## What remains unverified
 

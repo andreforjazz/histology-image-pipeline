@@ -15,3 +15,6 @@ NumPy, Pillow, tifffile, imagecodecs, OpenSlide, SlideIO, pylibCZIrw, SciPy, Ope
 ## Provenance
 
 The starting Python research scripts were provided by the repository owner. The original content hashes are recorded in `docs/python_sources.json`; subsequent integration and correctness changes are described in `docs/SELECTION.md`. This repository makes no claim that the CODA algorithm or scanner-decoding libraries were authored by its maintainer.
+
+
+The timing wrapper creates temporary copies of the locally installed CODA registration and mask functions with elapsed-time hooks. It checks for the expected source anchors, preserves the original local files, and removes the temporary copies afterwards. This instrumentation does not claim authorship of the CODA algorithm; its original notices remain in the temporary copies.

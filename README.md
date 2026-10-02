@@ -27,6 +27,7 @@ flowchart LR
 - Runs CODA global and elastic registration on low-resolution images in MATLAB.
 - Applies those transforms at other resolutions, using micrometres per pixel rather than relying on magnification labels.
 - Exports visual registration overlays and provides tests using generated images only.
+- Records per-image and per-resolution timings, with CSV reports for dataset-wide and per-scanner performance analysis.
 
 ## Repository layout
 
@@ -37,7 +38,7 @@ flowchart LR
 docs/                        User guide, converter comparison, provenance, validation
 requirements/                Python dependencies by stage
 tests/                       Synthetic Python tests and optional MATLAB checks
-tools/                       Environment check and local CODA setup
+tools/                       Environment check, CODA setup and timing reports
 ```
 
 ## Quick start
@@ -70,9 +71,23 @@ folder_names = ['2x', '10x', '20x', '40x']
 pixel_resolutions = [5, 1, 0.5, 0.25]  # Micrometres/pixel
 save_ome = [0, 1, 1, 1]  # 0 = TIFF, 1 = OME-TIFF, in the same order
 load_native_resolution = 1
+scanner_name = 'Olympus VS200'  # Replace with your actual scanner/model
+scanner_manifest = None  # Optional image,scanner CSV for mixed batches
 ```
 
 The reader loads each source once at the finest resolution needed, then creates every requested output from that loaded image. You may choose any number of resolutions. Set an MPP to `0` to include native resolution. Command-line usage remains available, including multiple folders and MPP values in one command; see the guide.
+
+## Processing times
+
+Every stage saves a separate CSV under its output/input `timings/` folder, recording per-image timings and scanner identity. Conversion separates the shared read, each output resolution's resize/save time, and the image total. MATLAB calculation and Python application also record per-image and batch totals.
+
+Generate Excel-compatible reports for later plots:
+
+```powershell
+python tools/summarize_timings.py --input "D:\dataset" --output "D:\dataset\timing_report" --inventory "D:\dataset\scanners.csv"
+```
+
+The optional inventory identifies images without measurements. Reports provide individual totals, means and sample standard deviations by scanner, stage and resolution; skipped/failed work is excluded, repeated runs are handled explicitly, and historical images remain unmeasured until separately estimated. See the [timing and plotting guide](docs/TIMING_GUIDE.md) for scanner configuration, exact timing boundaries and report filters.
 
 ## Validation status
 
@@ -83,6 +98,7 @@ An optional MATLAB integration check runs CODA on generated images and compares 
 ## Documentation
 
 - [Step-by-step user guide](docs/USER_GUIDE.md)
+- [Timing measurements, scanner comparisons and plots](docs/TIMING_GUIDE.md)
 - [Difference between the two WSI converters](docs/CONVERTER_COMPARISON.md)
 - [Selection and change history](docs/SELECTION.md)
 - [Testing and known limitations](docs/VALIDATION.md)

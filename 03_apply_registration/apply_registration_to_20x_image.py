@@ -360,7 +360,7 @@ def overlay_greyscale(image_a, image_b, view_image, filename=None):
 
     return overlay
 
-def apply_CODA_registration(image, image_name, pthdata, scale, view_image):
+def apply_CODA_registration(image, image_name, pthdata, scale, view_image, timing_row=None):
 
     # Load the registration metadata
     global_registration_file = os.path.join(pthdata, image_name+'.mat')
@@ -394,6 +394,8 @@ def apply_CODA_registration(image, image_name, pthdata, scale, view_image):
 
     # account for reference image
     if not moving_image:
+        if timing_row is not None:
+            timing_row["status"] = "reference"
         print("         ...reference image, registration not required. save padded image.")
         overlay = overlay_greyscale(image_elastic, image, view_image)
         return image, overlay
@@ -437,67 +439,79 @@ def process_images(pthim, image_list, pthdata, sx, out_folder, view_image=0, ome
     if not os.path.isdir(out_folder_v):
         os.makedirs(out_folder_v)
 
-    for idx, image_in_list in enumerate(image_list):
-        print(f"  Starting image {idx + 1} of {len(image_list)}: {image_in_list}...")
+    from pipeline_timing import TimingLog
+    timing = TimingLog(out_folder, "apply_registration")
+    with timing.measure(phase="batch_total"):
+        for idx, image_in_list in enumerate(image_list):
+            with timing.measure(os.path.join(pthim, image_in_list)) as image_timing:
+                print(f"  Starting image {idx + 1} of {len(image_list)}: {image_in_list}...")
 
-        # check if the image is already registered
-        #image_name = image_in_list.rsplit('.', 1)[0]
-        image_name = remove_extension(image_in_list)
-        if ome==1:
-            output_name = os.path.join(out_folder, image_name + '.ome.tif')
-        else:
-            output_name = os.path.join(out_folder, image_name + '.tif')
-        if os.path.exists(output_name):
-            print(f"    ...already saved this file")
-            continue
+                # check if the image is already registered
+                #image_name = image_in_list.rsplit('.', 1)[0]
+                image_name = remove_extension(image_in_list)
+                if ome==1:
+                    output_name = os.path.join(out_folder, image_name + '.ome.tif')
+                else:
+                    output_name = os.path.join(out_folder, image_name + '.tif')
+                if os.path.exists(output_name):
+                    image_timing["status"] = "skipped_existing"
+                    print(f"    ...already saved this file")
+                    continue
 
-        # Read the image
-        slide_path = os.path.join(pthim, image_in_list)
-        try:
-            # Get file extension
-            file_ext = os.path.splitext(slide_path)[-1].lower()
-            if file_ext in ['.ndpi', '.svs', '.scn']:
-                print(f"    ...reading {slide_path} with OpenSlide")
-                wsi = OpenSlide(slide_path)
-                image = wsi.read_region(location=(0, 0), level=0, size=wsi.level_dimensions[0]).convert('RGB')
-                w, h = image.width, image.height
-                mppx, mppy = float(wsi.properties['openslide.mpp-x']), float(wsi.properties['openslide.mpp-y'])
-            elif file_ext in ['.tif', '.tiff']:
-                print(f"    ...reading {slide_path} with PIL")
-                image = Image.open(slide_path).convert('RGB')
-                mppx, mppy = read_tiff_mpp(slide_path)
-                w, h = image.size[:2]
+                # Read the image
+                slide_path = os.path.join(pthim, image_in_list)
+                with timing.measure(slide_path, "read", Path(pthim).name) as read_timing:
+                    try:
+                        # Get file extension
+                        file_ext = os.path.splitext(slide_path)[-1].lower()
+                        if file_ext in ['.ndpi', '.svs', '.scn']:
+                            print(f"    ...reading {slide_path} with OpenSlide")
+                            wsi = OpenSlide(slide_path)
+                            image = wsi.read_region(location=(0, 0), level=0, size=wsi.level_dimensions[0]).convert('RGB')
+                            w, h = image.width, image.height
+                            mppx, mppy = float(wsi.properties['openslide.mpp-x']), float(wsi.properties['openslide.mpp-y'])
+                        elif file_ext in ['.tif', '.tiff']:
+                            print(f"    ...reading {slide_path} with PIL")
+                            image = Image.open(slide_path).convert('RGB')
+                            mppx, mppy = read_tiff_mpp(slide_path)
+                            w, h = image.size[:2]
 
-            print(f"       ...image read successfully - file parameters: resolution of {mppx} and size of ({w}, {h})")
+                        read_timing["mpp"] = mppx
+                        print(f"       ...image read successfully - file parameters: resolution of {mppx} and size of ({w}, {h})")
 
-        except Exception as e:
-            print(f"       ...ERROR reading {image_in_list}: {e}")
-            raise
+                    except Exception as e:
+                        print(f"       ...ERROR reading {image_in_list}: {e}")
+                        raise
 
-        # get the scale between the high-resolution and registered images
-        validate_mpp(mppx, mppy)
-        if not np.isclose(mppx, mppy, rtol=1e-4):
-            raise ValueError('Registration application currently requires square pixels.')
-        scale = sx / mppx
+                # get the scale between the high-resolution and registered images
+                validate_mpp(mppx, mppy)
+                if not np.isclose(mppx, mppy, rtol=1e-4):
+                    raise ValueError('Registration application currently requires square pixels.')
+                image_timing["mpp"] = mppx
+                image_timing["resolution"] = Path(pthim).name
+                image_timing["detail"] = f"registration_mpp={sx}; view={view_image}; ome={ome}"
+                scale = sx / mppx
 
-        # register the image
-        image, overlay = apply_CODA_registration(image, image_name, pthdata, scale, view_image)
-        filename = os.path.join(out_folder_v, image_name + '.jpg')
-        Image.fromarray(overlay).save(filename, quality=95, subsampling=0, optimize=True, dpi=(300, 300))
+                # register the image
+                with timing.measure(slide_path, "apply", Path(pthim).name, mppx):
+                    image, overlay = apply_CODA_registration(image, image_name, pthdata, scale, view_image, image_timing)
+                with timing.measure(slide_path, "save", Path(pthim).name, mppx):
+                    filename = os.path.join(out_folder_v, image_name + '.jpg')
+                    Image.fromarray(overlay).save(filename, quality=95, subsampling=0, optimize=True, dpi=(300, 300))
 
-        # save the file as either a normal or an ome-tif
-        if ome == 1:
-            print("             ...saving as an ome tif")
-            save_ome_tif(image, output_name, mppx)
-        else:
-            try: # save as normal tif
-                Image.fromarray(image).save(output_name, resolution=1e4 / mppx, resolution_unit=3, compression=None)
-            except Exception as e: # save as ome-tif
-                print(f"          ...error saving {image_in_list} as tif: {e}, try saving this image as an ome-tif")
-                continue
+                    # save the file as either a normal or an ome-tif
+                    if ome == 1:
+                        print("             ...saving as an ome tif")
+                        save_ome_tif(image, output_name, mppx)
+                    else:
+                        try: # save as normal tif
+                            Image.fromarray(image).save(output_name, resolution=1e4 / mppx, resolution_unit=3, compression=None)
+                        except Exception as e: # Preserve failure so timing and exit status remain accurate
+                            print(f"          ...error saving {image_in_list} as tif: {e}")
+                            raise
 
-        print("  Image save successful!")
-        print("  ")
+                print("  Image save successful!")
+                print("  ")
 
 def apply_registration_to_20x(pthim, pthdata, sx, validate_imgs=0, out_folder=None, ome=1):
     print('Applying CODA registration to calibrated images:')

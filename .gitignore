@@ -31,3 +31,14 @@ docs/matlab_dependency_check.txt
 *.mat
 *.zip
 *.pdf
+
+# Runtime measurements contain local image names and paths; keep them out of Git.
+timings/
+timing_report/
+*_timing_report/
+all_measurements.csv
+image_totals.csv
+summary.csv
+batch_totals.csv
+coverage.csv
+scanners.csv

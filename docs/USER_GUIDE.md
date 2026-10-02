@@ -155,3 +155,8 @@ python tests/check_matlab_results.py outputs/validation/matlab_reference.mat
 ```
 
 The automated examples do not replace validation with representative real slides. Large native reads, full displacement arrays, and high-resolution outputs can require substantial RAM. See [validation limits](VALIDATION.md).
+
+
+## Timing and dataset performance reports
+
+All supported entry points now save per-image CSV timing logs automatically. Set `scanner_name` / `scanner_manifest` in the conversion script, use `--scanner` / `--scanner-manifest` for Python application, and pass scanner metadata to MATLAB `run_registration`. The [timing guide](TIMING_GUIDE.md) explains setup, the exact read/resize/save/alignment boundaries, mean-time reports and plotting examples. CSV reports open in Excel; old images without timings remain explicitly unmeasured.
