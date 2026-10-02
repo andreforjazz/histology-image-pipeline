@@ -4,7 +4,9 @@ Validation performed on 1 October 2026. Tests use synthetic data; no research im
 
 ## Completed locally
 
-All 18 Python tests passed in a newly created, isolated environment. Dependency imports and `pip check` passed. Exact installed versions are recorded in `requirements/validated-windows-py311.txt`.
+All 22 Python tests passed in the isolated project environment. The initial 18-test suite also passed on GitHub's Windows and Linux runners. Dependency imports and `pip check` passed. Exact installed versions are recorded in `requirements/validated-windows-py311.txt`.
+
+The four added tests verify no-argument script settings, four calibrated outputs from one image read, one reader call for both dedicated VSI/CZI routes (including mixed native/downsampled requests), multi-output CLI usage, and rejection of invalid output lists before creating directories. Dedicated multi-output reader-call checks use mocked reader results; the separate generated-CZI decoding test still exercises the real backend.
 
 - Python regression tests: TIFF calibration; missing-calibration rejection; OME metadata, pyramid structure and pixel round trip; calibrated downsampling; no upsampling; affine identity, translation, flip and rotation centre; elastic identity, translation and outside fill; padding; dotted names; reference-first MAT metadata; reference inclusion without a D file; failed-read exit status; scale factors 5, 10 and 20.
 - An actual CZI file generated with pylibCZIrw was decoded and downsampled with the dedicated CZI reader, including a negative stage origin and BGR-to-RGB conversion.

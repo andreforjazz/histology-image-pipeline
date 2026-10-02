@@ -42,32 +42,44 @@ Keep scanner companion directories beside their parent files, including the VSI 
 
 ## 3. Convert and downsample
 
-Run commands from the repository root. Replace all example paths with your data locations.
+### Recommended: edit the settings in the script
 
-### Olympus/Evident VSI
+Open `01_conversion_downsampling/run_conversion.py` and edit the block at the top:
 
-```bash
-python 01_conversion_downsampling/run_conversion.py --format vsi --input "D:/data/raw" --output "D:/data/processed" --folder 2x --mpp 5 --plain-tif
-python 01_conversion_downsampling/run_conversion.py --format vsi --input "D:/data/raw" --output "D:/data/processed" --folder 20x --mpp 0.5
+```python
+pth0 = r'D:\data\raw'
+outpth = None
+file_format = 'vsi'
+folder_names = ['2x', '10x', '20x', '40x']
+pixel_resolutions = [5, 1, 0.5, 0.25]
+save_ome = [0, 1, 1, 1]
+load_native_resolution = 1
 ```
 
-### Zeiss CZI
+Click **Run** in PyCharm without command-line arguments. Alternatively, run `python 01_conversion_downsampling/run_conversion.py` from the repository root.
 
-Use the same commands with `--format czi`. These dedicated readers accept a directory.
+`pth0` selects the input directory. `outpth = None` creates the output subfolders inside that directory; set another path to keep outputs elsewhere. For `file_format = 'other'`, `pth0` can also select a single image; with `outpth = None`, outputs go beside it.
 
-### Other scanners
+The three lists correspond by position and must have the same length. You can request any subset or other resolutions, for example `folder_names = ['2x', '20x']`, `pixel_resolutions = [5, 0.5]`, and `save_ome = [0, 1]`. Use unique subfolder names. Each image is decoded once at the finest resolution needed, and all outputs are derived from that loaded image. A resolution of `0` requests native data even when other outputs are downsampled. Requesting a finer output may increase the memory needed for that shared image.
 
-Use `--format other`. This accepts either a directory or one file:
+Choose `file_format = 'vsi'` for Olympus/Evident, `'czi'` for Zeiss, or `'other'` for the shared converter. The dedicated VSI/CZI readers accept a directory. Set `load_native_resolution = 0` to allow source-pyramid reads where supported.
+
+### Optional command-line usage
+
+You can also request all resolutions in one command:
 
 ```bash
-python 01_conversion_downsampling/run_conversion.py --format other --input "D:/data/raw/slide.svs" --output "D:/data/processed" --folder 2x --mpp 5 --plain-tif
+python 01_conversion_downsampling/run_conversion.py --format vsi --input "D:/data/raw" --output "D:/data/processed" --folder 2x 10x 20x 40x --mpp 5 1 0.5 0.25 --save-ome 0 1 1 1
 ```
+
+Command-line arguments replace the settings block for that run. Previous single-resolution commands still work.
 
 For a mixed-format folder, selecting individual files prevents accidental duplicate-stem outputs. The shared converter also routes VSI/CZI to their dedicated readers.
 
 Options:
 
-- `--plain-tif`: plain TIFF, recommended for low-resolution CODA input. Default output is pyramidal OME-TIFF.
+- `--save-ome 0 1 1 1`: select TIFF/OME-TIFF for each folder in order.
+- `--plain-tif`: plain TIFF for every output, recommended for low-resolution CODA input. Cannot be combined with `--save-ome`. Without either option, every output is pyramidal OME-TIFF.
 - `--mpp 0`: retain native resolution.
 - `--fast-pyramid`: allow the source pyramid where supported. The default OpenSlide/VSI/CZI route starts with native-resolution data. iSyntax uses a suitable available pyramid level regardless of this flag.
 

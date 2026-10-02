@@ -20,6 +20,7 @@ sys.path[:0] = [str(ROOT / '01_conversion_downsampling'), str(ROOT / '03_apply_r
 import WSI2OMEtif_All_file_types as multi
 import apply_registration_to_20x_image as registration
 from image_metadata import read_tiff_mpp
+import run_conversion as conversion_runner
 
 
 def pattern(height=48, width=64):
@@ -34,6 +35,65 @@ class PipelineTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_script_settings_export_four_resolutions_from_one_read(self):
+        source = self.folder / 'input.tif'
+        tifffile.imwrite(source, pattern(80, 160), resolution=(40000, 40000), resolutionunit='CENTIMETER')
+        output = self.folder / 'output'
+        with patch.multiple(conversion_runner, pth0=str(source), outpth=str(output),
+                            file_format='other', folder_names=['2x', '10x', '20x', '40x'],
+                            pixel_resolutions=[5, 1, 0.5, 0.25], save_ome=[0, 1, 1, 1],
+                            load_native_resolution=1):
+            with patch.object(multi.Image, 'open', wraps=Image.open) as reader:
+                conversion_runner.main([])
+                self.assertEqual(reader.call_count, 1)
+        for name, mpp, shape, suffix in [('2x',5,(4,8),'.tif'), ('10x',1,(20,40),'.ome.tif'),
+                                        ('20x',0.5,(40,80),'.ome.tif'), ('40x',0.25,(80,160),'.ome.tif')]:
+            f = output / name / ('input'+suffix)
+            self.assertEqual(read_tiff_mpp(f), (mpp, mpp))
+            with tifffile.TiffFile(f) as tif:
+                self.assertEqual(tif.pages[0].shape[:2], shape)
+
+    def test_dedicated_readers_load_once_for_multiple_outputs(self):
+        for module_name, reader_name in [('vsi2ometif', 'read_vsi'), ('CZI2OMEtif', 'read_czi')]:
+            with self.subTest(reader=reader_name):
+                try:
+                    import importlib
+                    module = importlib.import_module(module_name)
+                except ImportError:
+                    self.skipTest('Install scanner dependencies for dedicated reader tests.')
+                for resolutions, expected_target in [([5, 1, 0.5, 0.25], 0.25), ([5, 0], 0)]:
+                    out = self.folder / module_name / str(expected_target)
+                    folders = [str(i) for i in range(len(resolutions))]
+                    for folder in folders:
+                        (out / folder).mkdir(parents=True)
+                    with patch.object(module, reader_name, return_value=(Image.fromarray(pattern(80,160)),0.25,0.25)) as read:
+                        module.process_images(str(self.folder), folders, ['slide.'+reader_name[5:]],
+                                              resolutions, [0]*len(folders), outpth=str(out))
+                        self.assertEqual(read.call_count, 1)
+                        self.assertEqual(read.call_args.args[1], expected_target)
+                    self.assertEqual(len(list(out.rglob('*.tif'))), len(folders))
+
+    def test_multiresolution_cli(self):
+        source = self.folder / 'input.tif'
+        tifffile.imwrite(source, pattern(), resolution=(20000,20000), resolutionunit='CENTIMETER')
+        output = self.folder / 'out'
+        result = subprocess.run([sys.executable, str(ROOT / '01_conversion_downsampling/run_conversion.py'),
+            '--format', 'other', '--input', str(source), '--output', str(output),
+            '--folder', '2x', '20x', '--mpp', '5', '0.5', '--save-ome', '0', '1'], capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        self.assertTrue((output / '2x/input.tif').is_file())
+        self.assertTrue((output / '20x/input.ome.tif').is_file())
+
+    def test_output_settings_are_validated_before_creating_folders(self):
+        source = self.folder / 'input.tif'
+        source.touch()
+        for folders, resolutions, formats in [(['2x','20x'],[5],[0,1]),
+                                              (['2x','2X'],[5,1],[0,1]),
+                                              (['../outside'],[5],[0])]:
+            with self.assertRaises(ValueError):
+                conversion_runner.run_conversion(source,self.folder/'out','other',folders,resolutions,formats)
+        self.assertFalse((self.folder/'out').exists())
 
     def test_calibrated_tiff_resolution(self):
         f = self.folder / 'sample.tif'

@@ -60,11 +60,19 @@ python -m unittest discover -s tests -v
 
 Install the external CODA dependency before calculating new registration transforms; follow the [English user guide](docs/USER_GUIDE.md). Scanner library availability varies by operating system. The original CODA scripts use Windows path conventions, so the supported MATLAB workflow is Windows.
 
-Example: generate a low-resolution TIFF for alignment from a folder of VSI images:
+To generate several resolutions from each source in one run, edit the settings at the top of `01_conversion_downsampling/run_conversion.py` and click **Run** in PyCharm:
 
-```bash
-python 01_conversion_downsampling/run_conversion.py --format vsi --input "D:/data/raw" --output "D:/data/processed" --folder 2x --mpp 5 --plain-tif
+```python
+pth0 = r'D:\data\raw'
+outpth = None  # Save the output subfolders inside pth0
+file_format = 'vsi'  # 'vsi', 'czi', or 'other'
+folder_names = ['2x', '10x', '20x', '40x']
+pixel_resolutions = [5, 1, 0.5, 0.25]  # Micrometres/pixel
+save_ome = [0, 1, 1, 1]  # 0 = TIFF, 1 = OME-TIFF, in the same order
+load_native_resolution = 1
 ```
+
+The reader loads each source once at the finest resolution needed, then creates every requested output from that loaded image. You may choose any number of resolutions. Set an MPP to `0` to include native resolution. Command-line usage remains available, including multiple folders and MPP values in one command; see the guide.
 
 ## Validation status
 
