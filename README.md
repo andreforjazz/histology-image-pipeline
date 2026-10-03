@@ -59,6 +59,15 @@ python tools/check_environment.py
 python -m unittest discover -s tests -v
 ```
 
+Alternatively, with Anaconda, create the same environment plus JupyterLab and `wsidicom` (Pramana `.dcm`) in one step, then open `01_conversion_downsampling/run_conversion.ipynb` with the **Python (histology-pipeline)** kernel:
+
+```bash
+conda env create -f environment.yml
+conda activate histology-pipeline
+python -m ipykernel install --user --name histology-pipeline --display-name "Python (histology-pipeline)"
+jupyter lab
+```
+
 Install the external CODA dependency before calculating new registration transforms; follow the [English user guide](docs/USER_GUIDE.md). Scanner library availability varies by operating system. The original CODA scripts use Windows path conventions, so the supported MATLAB workflow is Windows.
 
 To generate several resolutions from each source in one run, edit the settings at the top of `01_conversion_downsampling/run_conversion.py` and click **Run** in PyCharm:
