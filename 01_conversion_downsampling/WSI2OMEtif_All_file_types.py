@@ -9,6 +9,7 @@ from PIL import Image, ImageCms
 from pipeline_timing import TimingLog
 from openslide import OpenSlide
 from image_metadata import read_tiff_mpp, validate_mpp
+from chunked_readers import read_rgb_chunks, read_openslide_chunks, read_tiff_chunks
 
 try:
     import slideio
@@ -81,8 +82,13 @@ _ISYNTAX_PROBE = """
 import sys, isyntax
 slide = isyntax.ISyntax.open(sys.argv[1])
 level = int(sys.argv[2])
-w, h = slide.level_dimensions[level]
-slide.read_region(0, 0, w, h, level)
+try:
+    w, h = slide.level_dimensions[level]
+    for y in range(0, h, 4096):
+        for x in range(0, w, 4096):
+            slide.read_region(x, y, min(4096, w-x), min(4096, h-y), level)
+finally:
+    slide.close()
 """
 
 
@@ -103,12 +109,12 @@ def isyntax_decodes(slide_path, level, pixels):
     return probe.returncode == 0
 
 
-def read_isyntax(slide_path, target_um):
+def read_isyntax(slide_path, target_um, load_native_resolution=1):
     """Reads an iSyntax file as an RGB image and returns it with its pixel size.
 
-        The coarsest pyramid level that is still finer than target_um is decoded, so
-        the full resolution wavelet data is never held in memory. Returns None if the
-        file cannot be decoded
+        Decode native resolution, or the existing coarser pyramid selection in
+        fast mode, using bounded regions. The assembled RGB image remains in
+        memory. Returns None if the file cannot be decoded.
         """
 
     mppx, mppy = isyntax_wsi_mpp(slide_path)
@@ -125,7 +131,8 @@ def read_isyntax(slide_path, target_um):
         if not isyntax_decodes(slide_path, level, w * h):
             return None
 
-        image = Image.fromarray(slide.read_region(0, 0, w, h, level)[..., :3])
+        image = read_rgb_chunks((w, h), lambda xy, size: slide.read_region(
+            xy[0], xy[1], size[0], size[1], level)[..., :3])
         downsample = slide.level_downsamples[level]
     finally:
         slide.close()
@@ -334,7 +341,7 @@ def process_images(pth, output_names, image_list, umpix, save_ome, load_native_r
                                 else:
                                     print(f"       ...reading pyramid level 0 ({w_lvl}x{h_lvl})")
 
-                                image0 = wsi.read_region((0, 0), level, (w_lvl, h_lvl)).convert('RGB')
+                                image0 = read_openslide_chunks(wsi, level)
                                 w, h = w_lvl, h_lvl
                                 mppx = mppx * downsample
                                 mppy = mppy * downsample
@@ -379,7 +386,8 @@ def process_images(pth, output_names, image_list, umpix, save_ome, load_native_r
                                     mppx = float(lvl.mpp.width)
                                     mppy = float(lvl.mpp.height)
                                     print(f"       ...reading DICOM level {level_idx} ({w_lvl}x{h_lvl} at {mppx:.4f} um/px)")
-                                    image0 = wsi.read_region((0, 0), level_idx, (w_lvl, h_lvl)).convert('RGB')
+                                    image0 = read_rgb_chunks((w_lvl, h_lvl),
+                                        lambda xy, size: wsi.read_region(xy, lvl.level, size))
                                     w, h = w_lvl, h_lvl
                                 finally:
                                     wsi.close()
@@ -395,7 +403,7 @@ def process_images(pth, output_names, image_list, umpix, save_ome, load_native_r
                                                 level = lvl
                                     w_lvl, h_lvl = wsi.level_dimensions[level]
                                     downsample = wsi.level_downsamples[level]
-                                    image0 = wsi.read_region((0, 0), level, (w_lvl, h_lvl)).convert('RGB')
+                                    image0 = read_openslide_chunks(wsi, level)
                                     w, h = w_lvl, h_lvl
                                     mppx = mppx * downsample
                                     mppy = mppy * downsample
@@ -437,7 +445,7 @@ def process_images(pth, output_names, image_list, umpix, save_ome, load_native_r
                                     w_lvl, h_lvl = wsi.level_dimensions[level]
                                     downsample = wsi.level_downsamples[level]
                                     print(f"       ...reading pyramid level {level} ({w_lvl}x{h_lvl}, downsample {downsample:.1f}x)")
-                                    image0 = wsi.read_region((0, 0), level, (w_lvl, h_lvl)).convert('RGB')
+                                    image0 = read_openslide_chunks(wsi, level)
                                     w, h = w_lvl, h_lvl
                                     mppx = mppx * downsample
                                     mppy = mppy * downsample
@@ -453,8 +461,8 @@ def process_images(pth, output_names, image_list, umpix, save_ome, load_native_r
                             else:
                                 if wsi is not None:
                                     wsi.close()
-                                print(f"    ...reading standard TIFF {slide_path} with PIL")
-                                image0 = Image.open(slide_path).convert('RGB')
+                                print(f"    ...reading standard TIFF {slide_path} in tiles/strips")
+                                image0 = read_tiff_chunks(slide_path)
                                 w, h = image0.size[:2]
                                 try:
                                     wsi = OpenSlide(slide_path)
@@ -468,7 +476,7 @@ def process_images(pth, output_names, image_list, umpix, save_ome, load_native_r
 
                         elif file_ext in ['.i2syntax', '.isyntax']:
                             print(f"    ...reading {slide_path} with pyisyntax")
-                            isyntax_image = read_isyntax(slide_path, target_um)
+                            isyntax_image = read_isyntax(slide_path, target_um, load_native_resolution)
                             if isyntax_image is None:
                                 image_timing["status"] = "unsupported"
                                 read_timing["status"] = "unsupported"
