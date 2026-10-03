@@ -1,0 +1,12 @@
+name: histology-pipeline
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - jupyterlab
+  - ipykernel
+  - pip:
+      - -r requirements/conversion.txt
+      - -r requirements/registration.txt
+      - wsidicom  # Pramana .dcm support
