@@ -1,4 +1,4 @@
-"""Benchmark the original and streaming DICOM converters on the same slides.
+"""Benchmark the original and streaming converters on the same slides.
 
 Each run happens in a fresh process so peak memory is measured per conversion. After
 both runs every output page (level 0, each pyramid level, thumbnail) is compared
@@ -23,15 +23,16 @@ sys.path.insert(0, str(ROOT/'01_conversion_downsampling'))
 def child(args):
     os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')  # before numpy loads
     import psutil
-    slide = os.path.join(args.input, args.slide + '.dcm')
+    slide = next(str(p) for p in Path(args.input).iterdir() if p.is_file() and p.stem == args.slide)
     start = time.perf_counter()
     if args.impl == 'old':
         from WSI2OMEtif_All_file_types import WSI2tif
-        WSI2tif(slide, args.folder, args.mpp, args.save_ome, 1, outpth=args.out)
+        WSI2tif(slide, args.folder, args.mpp, args.save_ome, args.native, outpth=args.out)
     else:
-        from streaming_conversion import convert_dicom
-        convert_dicom(slide, args.out, args.folder, args.mpp, args.save_ome,
-                      threads=args.threads, pyramid_dir=args.pyramid_dir)
+        from streaming_conversion import convert_slide
+        convert_slide(slide, args.out, args.folder, args.mpp, args.save_ome,
+                      threads=args.threads, load_native_resolution=args.native,
+                      pyramid_dir=args.pyramid_dir)
     wall = time.perf_counter() - start
     proc = psutil.Process()
     mem, cpu = proc.memory_info(), proc.cpu_times()
@@ -82,6 +83,8 @@ def main():
     p.add_argument('--impls', nargs='+', default=['old', 'new'])
     p.add_argument('--threads', type=int)
     p.add_argument('--pyramid-dir')
+    p.add_argument('--native', type=int, default=1, choices=[0, 1],
+                   help='1 = read native resolution (default); 0 = allow a coarser source level')
     p.add_argument('--child', action='store_true', help=argparse.SUPPRESS)
     p.add_argument('--impl', help=argparse.SUPPRESS)
     p.add_argument('--slide', help=argparse.SUPPRESS)
@@ -102,7 +105,8 @@ def main():
             cmd = [sys.executable, __file__, '--child', '--impl', impl, '--slide', slide,
                    '--input', args.input, '--work', args.work, '--out', str(out),
                    '--slides', slide, '--folder', *args.folder,
-                   '--mpp', *map(str, args.mpp), '--save-ome', *map(str, args.save_ome)]
+                   '--mpp', *map(str, args.mpp), '--save-ome', *map(str, args.save_ome),
+                   '--native', str(args.native)]
             if args.threads:
                 cmd += ['--threads', str(args.threads)]
             if args.pyramid_dir and impl == 'new':

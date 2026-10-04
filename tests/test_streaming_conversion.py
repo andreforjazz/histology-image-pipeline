@@ -108,6 +108,50 @@ class StreamingConversionTests(unittest.TestCase):
         # Over 100:1 Pillow switches pass order; the sink must still match exactly
         self.assert_streamed_matches_save_ome_tif(46062, 130, 2048)
 
+    def assert_slide_matches_wsi2tif(self, slide, native=1):
+        from WSI2OMEtif_All_file_types import WSI2tif
+        args = (['2x', '40x'], [5, 0.25], [0, 1])
+        WSI2tif(str(slide), *args, native, outpth=str(self.folder/'old'))
+        written = sc.convert_slide(str(slide), str(self.folder/'new'), *args, threads=4,
+                                   load_native_resolution=native, verbose=False)
+        self.assertEqual(len(written), 2)
+        plain = slide.stem + '.tif'
+        np.testing.assert_array_equal(tifffile.imread(self.folder/'old'/'2x'/plain),
+                                      tifffile.imread(self.folder/'new'/'2x'/plain),
+                                      err_msg=f'{slide.name} 2x')
+        old = pages(self.folder/'old'/'40x'/(slide.stem + '.ome.tif'))
+        new = pages(self.folder/'new'/'40x'/(slide.stem + '.ome.tif'))
+        self.assertEqual(len(old), len(new))
+        for level, (a, b) in enumerate(zip(old, new)):
+            np.testing.assert_array_equal(a, b, err_msg=f'{slide.name} 40x page {level}')
+
+    def test_plain_tiff_matches_wsi2tif(self):
+        # Read whole by the original TIFF reader, then streamed to the writers
+        slide = self.folder/'plain.tif'
+        tifffile.imwrite(slide, tissue_like(2300, 1900, seed=6), photometric='rgb',
+                         resolution=(1e4 / 0.23, 1e4 / 0.23), resolutionunit='CENTIMETER')
+        self.assert_slide_matches_wsi2tif(slide)
+
+    def test_pyramidal_tiff_with_icc_matches_wsi2tif(self):
+        # Multi-level tiled TIFF: OpenSlide band reads plus the embedded-ICC conversion
+        from PIL import ImageCms
+        icc = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
+        image = tissue_like(2600, 2100, seed=7)
+        # 'ventana' in the name routes it through OpenSlide, as the original does
+        slide = self.folder/'ventana_pyramid.tif'
+        with tifffile.TiffWriter(slide) as tif:
+            for k in range(3):
+                level = image[::2**k, ::2**k]
+                tif.write(level, photometric='rgb', tile=(256, 256), compression='jpeg',
+                          resolution=(1e4 / (0.23 * 2**k),) * 2, resolutionunit='CENTIMETER',
+                          extratags=[(34675, 7, len(icc), icc, True)])
+        for native in (1, 0):  # native read, and the coarser-level choice of fast mode
+            with self.subTest(native=native):
+                self.assert_slide_matches_wsi2tif(slide, native)
+                for p in self.folder.rglob('*.tif'):
+                    if p.parent != self.folder:
+                        p.unlink()
+
     def test_aborted_output_leaves_no_file(self):
         image = tissue_like(3000, 1500, seed=4)
         path = self.folder/'cut.ome.tif'
